@@ -1,0 +1,22 @@
+--- a/rts/linker/Elf.c	2026-09-06 22:37:03
++++ b/rts/linker/Elf.c	2026-09-06 22:37:09
+@@ -2210,6 +2210,19 @@
+             line[match[2].rm_eo] = '\0';
+             stgFree((void*)*errmsg); // Free old message before creating new one
+             r = loadNativeObj_POSIX(line+match[2].rm_so, errmsg);
++            /* The #2615 linker-script workaround assumes that the
++               absolute paths found in the script are valid on the host.
++               That assumption breaks with a relocated cross toolchain
++               (e.g. conda-forge's sysroot'd binutils): the GROUP entry
++               points into a foreign filesystem root that does not
++               exist here, and dlopen fails with ENOENT.  Fall back to
++               the bare file name and let the host's dynamic loader
++               resolve it through its usual search order. */
++            if (r == NULL && strchr(line+match[2].rm_so, '/') != NULL) {
++               char *base = strrchr(line+match[2].rm_so, '/') + 1;
++               stgFree((void*)*errmsg);
++               r = loadNativeObj_POSIX(base, errmsg);
++            }
+             break;
+          }
+          // if control reaches here, no GROUP or INPUT ( ... ) directive

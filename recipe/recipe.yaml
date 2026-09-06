@@ -1,0 +1,128 @@
+context:
+  version: "9.12.4"
+
+package:
+  name: ghc
+  version: ${{ version }}
+
+source:
+  # Bootstrap compiler (stage 0): official upstream binary distribution.
+  # Only used to compile the patched stage 1 compiler from source.
+  - if: linux and x86_64
+    then:
+      # deb12 = glibc 2.36, runs on modern Ubuntu CI hosts
+      url: https://downloads.haskell.org/~ghc/${{ version }}/ghc-${{ version }}-x86_64-deb12-linux.tar.xz
+      sha256: cdc60a66f1c89604975c896b3c7577b079b602d8fb093af0f4b2b0912fa47bd1
+      target_directory: binary
+  - if: osx and arm64
+    then:
+      url: https://downloads.haskell.org/~ghc/${{ version }}/ghc-${{ version }}-aarch64-apple-darwin.tar.xz
+      sha256: 112ef68c250a98638325bf189fb302ec80095934418b0f8a70a7f23718010713
+      target_directory: binary
+  # cabal-install is needed to build hadrian. conda-forge has no
+  # osx-arm64 build of the `cabal` package, so use the official
+  # binaries on both platforms for consistency.
+  - if: linux and x86_64
+    then:
+      url: https://github.com/haskell/cabal/releases/download/cabal-install-v3.18.1.0/cabal-install-3.18.1.0-x86_64-linux-unknown.tar.xz
+      sha256: c6385c155ff61f792dfed0e8c101004db63f8d8b556dd6c9838f81a012bf28a6
+      target_directory: cabal-install
+  - if: osx and arm64
+    then:
+      url: https://github.com/haskell/cabal/releases/download/cabal-install-v3.18.1.0/cabal-install-3.18.1.0-aarch64-apple-darwin.tar.xz
+      sha256: c06fad68405466d45c60ed99839725b777f1f970a520b9cebc3cbe5acd603102
+      target_directory: cabal-install
+  - url: https://downloads.haskell.org/~ghc/${{ version }}/ghc-${{ version }}-src.tar.xz
+    sha256: 02d1ee5080acf00e135b93b238f09015b06ff27254cde59669cf57c42c2bee43
+    target_directory: source
+    patches:
+      # RTS linker: fall back to the bare file name when a GROUP entry
+      # from a sysroot linker script does not exist on the host.  This
+      # makes Template Haskell / GHCi work with relocated cross
+      # toolchains (e.g. conda-forge's sysroot'd binutils) on hosts
+      # whose filesystem layout differs from the sysroot (Debian et al).
+      - rts-linker-sysroot-fallback.patch
+
+build:
+  number: 0
+  skip: win
+  script: build.sh
+
+requirements:
+  build:
+    - ${{ compiler("c") }}
+    # to install the bootstrap bindist
+    - make
+    # configure and assorted build-time scripts
+    - perl
+    # some in-tree packages (haddock-library, ...) ship no pre-generated
+    # configure script and need autoreconf at configure time
+    - autoconf
+    - automake
+    # hadrian generates RTS headers (EventLogConstants.h, ...) with python
+    - python
+    - gmp
+    - ncurses
+  host:
+    - gmp
+    - ncurses
+    - libffi
+    # ghc-internal's cbits/iconv.c must be compiled against conda's
+    # libiconv header.  conda's libiconv only exports the GNU-prefixed
+    # symbols (_libiconv, _libiconv_open, _libiconv_close) and renames
+    # the POSIX names in its header, while Apple's SDK header yields the
+    # bare POSIX names.  In any conda environment the toolchain resolves
+    # -liconv to conda's libiconv (the compiler stack itself pulls it in
+    # transitively), so the archives GHC ships must reference the GNU
+    # names -- otherwise every user-program link dies with undefined
+    # _iconv symbols.  This mirrors how git/libxml2 handle iconv on osx.
+    - if: osx
+      then:
+        - libiconv
+  run:
+    # GHC's settings file invokes the conda C toolchain at runtime to
+    # compile C stubs and link.
+    - if: linux
+      then:
+        - gcc_linux-64 >=9
+    - if: osx
+      then:
+        - clang_osx-arm64
+        - libiconv
+    - gmp
+    - ncurses
+    - libffi
+
+tests:
+  - script:
+      - ghc --version
+      - ghc hello.hs -o hello
+      # compile a hello world with the installed compiler and verify the
+      # produced binary actually runs and prints the expected output
+      - test "$(./hello)" = "Hello World"
+      # Template Haskell exercises the RTS dynamic linker
+      # (loadNativeObjFromLinkerScript_ELF), which is exactly the code
+      # path fixed by the carried patch.
+      - ghc th_smoke.hs -o th_smoke
+      - test "$(./th_smoke)" = "template haskell works"
+    files:
+      recipe:
+        - hello.hs
+        - th_smoke.hs
+
+about:
+  homepage: https://www.haskell.org/ghc/
+  summary: Glorious Glasgow Haskell Compilation System
+  description: >-
+    GHC built from source with a patch that makes the RTS linker fall
+    back to bare SONAMEs when following absolute paths out of sysroot
+    linker scripts, fixing Template Haskell and GHCi on hosts whose
+    filesystem layout differs from the (CentOS-derived) conda sysroot.
+  license: BSD-3-Clause
+  # recipe-relative (the bindist source carries no top-level LICENSE)
+  license_file: LICENSE
+  repository: https://github.com/black-desk-devkit/ghc-feedstock
+
+extra:
+  recipe-maintainers:
+    - black-desk

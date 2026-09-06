@@ -1,0 +1,98 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.target-platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        target-platform: [linux-64, osx-arm64]
+        include:
+          - target-platform: linux-64
+            os: ubuntu-latest
+          - target-platform: osx-arm64
+            os: macos-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build conda package
+        uses: prefix-dev/rattler-build-action@v0.2.36
+        with:
+          recipe-path: recipe/recipe.yaml
+          artifact-name: pkg-${{ matrix.target-platform }}
+          build-args: >-
+            -c conda-forge
+            --target-platform ${{ matrix.target-platform }}
+
+      # keep the built package even when tests fail, so it can be
+      # inspected locally
+      - name: Upload package artifact (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conda-${{ matrix.target-platform }}
+          path: output/**/*.conda
+
+      - name: Test package
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The build tree is no longer needed after the action step has
+          # packed and uploaded the artifact; free the disk so the test
+          # environment (which unpacks gcc/binutils/sysroot into /tmp)
+          # does not run out of space.
+          rm -rf output/bld
+          pkg=$(find output -name '*.conda' | head -1)
+          if [ -z "$pkg" ]; then
+            echo "::error::No .conda package found in output/"
+            exit 1
+          fi
+          echo "Testing: $pkg"
+          rattler-build test -c conda-forge --package-file "$pkg"
+
+  upload:
+    name: Upload to prefix.dev
+    needs: build
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: output
+          merge-multiple: true
+
+      - name: Setup rattler-build
+        uses: prefix-dev/rattler-build-action@v0.2.36
+        with:
+          setup-only: true
+
+      - name: Upload packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t pkgs < <(find output -type f \( -name '*.conda' -o -name '*.tar.bz2' \))
+          if [ ${#pkgs[@]} -eq 0 ]; then
+            echo "No packages to upload"
+            exit 0
+          fi
+          for pkg in "${pkgs[@]}"; do
+            echo "Uploading ${pkg}"
+            rattler-build upload prefix -c black-desk --skip-existing "${pkg}"
+          done
