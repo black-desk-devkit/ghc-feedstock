@@ -34,6 +34,7 @@ jobs:
           build-args: >-
             -c conda-forge
             --target-platform ${{ matrix.target-platform }}
+            --error-prefix-in-binary
 
       # keep the built package even when tests fail, so it can be
       # inspected locally
@@ -44,7 +45,7 @@ jobs:
           name: conda-${{ matrix.target-platform }}
           path: output/**/*.conda
 
-      - name: Test package
+      - name: Test package (black-desk + conda-forge)
         shell: bash
         run: |
           set -euo pipefail
@@ -59,7 +60,10 @@ jobs:
             exit 1
           fi
           echo "Testing: $pkg"
-          rattler-build test -c conda-forge --package-file "$pkg"
+          rattler-build test \
+            -c https://prefix.dev/black-desk \
+            -c conda-forge \
+            --package-file "$pkg"
 
   upload:
     name: Upload to prefix.dev

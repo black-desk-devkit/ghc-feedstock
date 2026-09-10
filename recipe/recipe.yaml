@@ -46,6 +46,15 @@ source:
 build:
   number: 0
   skip: win
+  # Error when a shipped binary links a library that the run
+  # dependencies do not cover (overlinking), or when a run dependency
+  # provides no library that anything in the package links
+  # (overdepending).  The latter is an experiment here: the conda C
+  # toolchain run deps are executables GHC invokes at runtime rather
+  # than linked libraries, so they may be reported as over-depends.
+  dynamic_linking:
+    overlinking_behavior: error
+    overdepending_behavior: error
   script: build.sh
 
 requirements:
@@ -109,6 +118,14 @@ tests:
       recipe:
         - hello.hs
         - th_smoke.hs
+  # structural sanity: the compiler, the settings file that drives all
+  # user-program compilation/linking, and the activation hook must be
+  # where the recipe expects them
+  - package_contents:
+      files:
+        - bin/ghc
+        - lib/ghc-${{ version }}/lib/settings
+        - etc/conda/activate.d/ghc_activate.sh
 
 about:
   homepage: https://www.haskell.org/ghc/
